@@ -25,6 +25,7 @@ $: << File.expand_path(File.join(File.dirname(__FILE__), "../ext"))
 require 'ferret_ext'
 require 'ferret/version'
 require 'ferret/document'
+require 'ferret/search'
 require 'ferret/index'
 require 'ferret/field_infos'
 require 'ferret/field_symbol'
