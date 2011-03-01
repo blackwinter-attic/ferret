@@ -9,6 +9,14 @@
 #include <array.h>
 #include "search.h"
 
+#define QueryTermsByField(s, q, o) \
+    TYPE(o) == T_HASH && RTEST(rb_funcall(o, \
+        rb_intern("delete"), 1, ID2SYM(rb_intern("with_fields")))) ? \
+            rb_funcall(s, rb_intern("query_terms_by_field"), 1, q) : Qnil
+
+#define TermVectorFields(s, d, f) \
+    rb_funcall(s, rb_intern("term_vector_fields"), 3, d, Qnil, f)
+
 VALUE mSearch;
 
 static VALUE cHit;
@@ -107,6 +115,7 @@ static VALUE sym_comparator;
 /* Hits */
 static ID id_doc;
 static ID id_score;
+static ID id_fields;
 
 /* TopDocs */
 static ID id_hits;
@@ -149,11 +158,12 @@ extern VALUE frb_get_lazy_doc(LazyDoc *lazy_doc);
  ****************************************************************************/
 
 static VALUE
-frb_get_hit(Hit *hit)
+frb_get_hit(Hit *hit, VALUE fields)
 {
     return rb_struct_new(cHit,
                          INT2FIX(hit->doc),
                          rb_float_new((double)hit->score),
+                         fields,
                          NULL);
 }
 
@@ -164,14 +174,15 @@ frb_get_hit(Hit *hit)
  ****************************************************************************/
 
 static VALUE
-frb_get_td(TopDocs *td, VALUE rsearcher)
+frb_get_td(TopDocs *td, VALUE rsearcher, VALUE fields)
 {
     int i;
     VALUE rtop_docs;
     VALUE hit_ary = rb_ary_new2(td->size);
 
     for (i = 0; i < td->size; i++) {
-      rb_ary_store(hit_ary, i, frb_get_hit(td->hits[i]));
+      rb_ary_store(hit_ary, i, frb_get_hit(td->hits[i], RTEST(fields) ?
+          TermVectorFields(rsearcher, INT2FIX(td->hits[i]->doc), fields) : Qnil));
     }
 
     rtop_docs = rb_struct_new(cTopDocs,
@@ -2718,7 +2729,7 @@ frb_sea_search_internal(Query *query, VALUE roptions, Searcher *sea)
  *
  *  Run a query through the Searcher on the index. A TopDocs object is
  *  returned with the relevant results. The +query+ is a built in Query
- *  object. Here are the options;
+ *  object. Here are the options:
  *
  *  === Options
  *
@@ -2741,14 +2752,17 @@ frb_sea_search_internal(Query *query, VALUE roptions, Searcher *sea)
  *                  an integer or a float. Keep this in mind as you may need
  *                  to specify a fields type to sort it correctly. For more
  *                  on this, see the documentation for SortField
- *  :filter::       a Filter object to filter the search results with
- *  :filter_proc::  a filter Proc is a Proc which takes the doc_id, the score
+ *  :filter::       A Filter object to filter the search results with.
+ *  :filter_proc::  A filter proc is a Proc which takes the doc_id, the score
  *                  and the Searcher object as its parameters and returns
  *                  either a Boolean value specifying whether the result
  *                  should be included in the result set, or a Float between 0
  *                  and 1.0 to be used as a factor to scale the score of the
  *                  object. This can be used, for example, to weight the score
  *                  of a matched document by it's age.
+ *  :with_fields::  A Boolean value specifying whether the returned TopDocs
+ *                  object's hits shall be extended with their associated
+ *                  #term_vector_fields for this +query+. Default: +false+.
  */
 static VALUE
 frb_sea_search(int argc, VALUE *argv, VALUE self)
@@ -2758,7 +2772,8 @@ frb_sea_search(int argc, VALUE *argv, VALUE self)
     Query *query;
     rb_scan_args(argc, argv, "11", &rquery, &roptions);
     Data_Get_Struct(rquery, Query, query);
-    return frb_get_td(frb_sea_search_internal(query, roptions, sea), self);
+    return frb_get_td(frb_sea_search_internal(query, roptions, sea), self,
+        QueryTermsByField(self, rquery, roptions));
 }
 
 /*
@@ -2766,14 +2781,13 @@ frb_sea_search(int argc, VALUE *argv, VALUE self)
  *     searcher.search_each(query, options = {}) {|doc_id, score| do_something}
  *         -> total_hits
  *
- *  Run a query through the Searcher on the index. A TopDocs object is
- *  returned with the relevant results. The +query+ is a Query object. The
- *  Searcher#search_each method yields the internal document id (used to
- *  reference documents in the Searcher object like this; +searcher[doc_id]+)
- *  and the search score for that document. It is possible for the score to be
- *  greater than 1.0 for some queries and taking boosts into account. This
- *  method will also normalize scores to the range 0.0..1.0 when the max-score
- *  is greater than 1.0. Here are the options;
+ *  Run a query through the Searcher on the index. The total number of hits
+ *  is returned. The +query+ is a Query object. The Searcher#search_each method
+ *  yields the internal document id (used to reference documents in the Searcher
+ *  object like this; +searcher[doc_id]+) and the search score for that document.
+ *  It is possible for the score to be greater than 1.0 for some queries and
+ *  taking boosts into account. This method will also normalize scores to the
+ *  range 0.0..1.0 when the max-score is greater than 1.0. Here are the options:
  *
  *  === Options
  *
@@ -2796,11 +2810,15 @@ frb_sea_search(int argc, VALUE *argv, VALUE self)
  *                  an integer or a float. Keep this in mind as you may need
  *                  to specify a fields type to sort it correctly. For more
  *                  on this, see the documentation for SortField
- *  :filter::       a Filter object to filter the search results with
- *  :filter_proc::  a filter Proc is a Proc which takes the doc_id, the score
+ *  :filter::       A Filter object to filter the search results with.
+ *  :filter_proc::  A filter Proc is a Proc which takes the doc_id, the score
  *                  and the Searcher object as its parameters and returns a
  *                  Boolean value specifying whether the result should be
  *                  included in the result set.
+ *  :with_fields::  A Boolean value specifying whether the search result's
+ *                  associated #term_vector_fields for this +query+ shall be
+ *                  yielded in addition to the internal document id and the
+ *                  search score for that document. Default: +false+.
  */
 static VALUE
 frb_sea_search_each(int argc, VALUE *argv, VALUE self)
@@ -2809,10 +2827,11 @@ frb_sea_search_each(int argc, VALUE *argv, VALUE self)
     Query *q;
     float max_score;
     TopDocs *td;
-    VALUE rquery, roptions, rtotal_hits;
+    VALUE rquery, roptions, rtotal_hits, fields, doc, score;
     GET_SEA();
 
     rb_scan_args(argc, argv, "11", &rquery, &roptions);
+    fields = QueryTermsByField(self, rquery, roptions);
 
 #ifndef FRT_RUBY_VERSION_1_9
     rb_thread_critical = Qtrue;
@@ -2824,8 +2843,15 @@ frb_sea_search_each(int argc, VALUE *argv, VALUE self)
 
     /* yield normalized scores */
     for (i = 0; i < td->size; i++) {
-        rb_yield_values(2, INT2FIX(td->hits[i]->doc),
-                        rb_float_new((double)(td->hits[i]->score/max_score)));
+        doc = INT2FIX(td->hits[i]->doc);
+        score = rb_float_new((double)(td->hits[i]->score/max_score));
+
+        if (RTEST(fields)) {
+            rb_yield_values(3, doc, score, TermVectorFields(self, doc, fields));
+        }
+        else {
+            rb_yield_values(2, doc, score);
+        }
     }
 
     rtotal_hits = INT2FIX(td->total_hits);
@@ -3192,6 +3218,9 @@ cTopDocs = rb_define_class_under(mSearch, "TopDocs", rb_cObject);
  *  match. The score is a positive Float value. The score contained in a hit
  *  is not normalized so it can be greater than 1.0. To normalize scores to
  *  the range 0.0..1.0 divide the scores by TopDocs#max_score.
+ *
+ *  Additionally, a hit might hold a reference to its associated fields.
+ *  See Searcher#term_vector_fields.
  */
 static void
 Init_Hit(void)
@@ -3200,11 +3229,12 @@ Init_Hit(void)
     /* rdochack
     cHit = rb_define_class_under(mSearch, "Hit", rb_cObject);
     */
-    cHit = rb_struct_define(hit_class, "doc", "score", NULL);
+    cHit = rb_struct_define(hit_class, "doc", "score", "fields", NULL);
     rb_set_class_path(cHit, mSearch, hit_class);
     rb_const_set(mSearch, rb_intern(hit_class), cHit);
     id_doc = rb_intern("doc");
     id_score = rb_intern("score");
+    id_fields = rb_intern("fields");
 }
 
 /*

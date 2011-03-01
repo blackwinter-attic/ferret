@@ -335,18 +335,6 @@ module Ferret::Index
       end
     end
 
-    # See #search. Extends the returned TopDocs object's hits with their
-    # associated #term_vector_fields for this +query+.
-    def search_with_fields(query, options = {})
-      top_docs, fields = search(query, options), query_terms_by_field(query)
-
-      top_docs.hits.map! { |hit|
-        HitWithFields.new(hit, term_vector_fields(hit.doc, nil, fields))
-      }
-
-      top_docs
-    end
-
     # Run a query through the Searcher on the index. A TopDocs object is
     # returned with the relevant results. The +query+ is a Query object or a
     # query string that can be validly parsed by the Ferret::QueryParser. The
@@ -398,21 +386,8 @@ module Ferret::Index
         ensure_searcher_open()
         query = do_process_query(query)
 
-        @searcher.search_each(query, options) do |doc, score|
-          yield doc, score
-        end
+        @searcher.search_each(query, options) { |*args| yield(*args) }
       end
-    end
-
-    # See #search_each. Yields the search result's associated #term_vector_fields
-    # for this +query+ in addition to the internal document id and the search
-    # score for that document.
-    def search_each_with_fields(query, options = {})  # :yield: doc, score, fields
-      fields = query_terms_by_field(query)
-
-      search_each(query, options) { |doc, score|
-        yield doc, score, term_vector_fields(doc, nil, fields)
-      }
     end
 
     # Run a query through the Searcher on the index, ignoring scoring and
@@ -504,103 +479,6 @@ module Ferret::Index
         end
         return @reader.term_vector(id, field)
       end
-    end
-
-    # Determines +query+'s #query_terms_by_field (unless passed in +fields+)
-    # and associates them with their offsets in the document identified by
-    # +doc_id+.
-    #
-    # If offsets and positions are not available for a field in this index
-    # (the FieldInfo's <tt>:term_vector</tt> option is set to something other
-    # than <tt>:with_positions_offsets</tt>, which is the default), just returns
-    # the TermVector's terms associated with the document grouped by their field
-    # name.
-    #
-    # This way you know exactly which terms (at which offsets) in a document
-    # matched a particular query. It allows you to apply custom highlighting,
-    # even when field contents are not stored (<tt>:store => :no</tt>).
-    #
-    # Example:
-    #
-    #   index = Index.new(:field_infos => FieldInfos.new(:store => :no))
-    #
-    #   docs  = [
-    #     { :title => 'Cats on a Roof', :description => 'Cats and flats'   },
-    #     { :title => 'Catwoman',       :description => 'Spandex and cats' }
-    #   ].each { |doc| index << doc }
-    #
-    #   query = 'cat? OR span*'
-    #
-    #   index.search_each_with_fields(query) { |id, score, fields|
-    #     puts "doc #{id}: #{score}"
-    #
-    #     doc = docs[id]
-    #
-    #     fields.each { |field, terms|
-    #       content = doc[field].dup
-    #       length  = content.length
-    #
-    #       terms.each { |term|
-    #         # in case we don't have offsets and positions for this field
-    #         break unless term.respond_to?(:offset)
-    #
-    #         offset = term.offset
-    #
-    #         # highlight term
-    #         content.insert(content.length - length + offset.start, '<b>')
-    #         content.insert(content.length - length + offset.end,   '</b>')
-    #       }
-    #
-    #       puts "#{field}: #{content}"
-    #     }
-    #   }
-    def term_vector_fields(doc_id, query = nil, fields = nil)
-      fields ||= query_terms_by_field(query) if query
-      raise ArgumentError, 'wrong number of arguments (1 for 2)' unless query || fields
-
-      fields_hash = {}
-
-      fields.each { |field, terms|
-        next unless tv = reader.term_vector(doc_id, field)
-
-        field_terms, have_offset = [], false
-
-        terms.each { |term|
-          tv.terms.each { |tvt|
-            next unless tvt.text == term.text
-
-            if tv.offsets && tvt.positions
-              have_offset ||= true
-
-              tvt.positions.each { |pos|
-                field_terms << TermVector::TVTermWithOffset.new(
-                  tvt, tv.offsets[pos]
-                )
-              }
-            else
-              field_terms << tvt
-            end
-
-            break
-          }
-        }
-
-        unless field_terms.empty?
-          field_terms.sort! if have_offset
-          fields_hash[field] = field_terms
-        end
-      }
-
-      fields_hash
-    end
-
-    # Groups +query+'s query terms (see Search::Query#terms) by their field
-    # name. Calls #process_query for +query+ if it's not a Query object already.
-    def query_terms_by_field(query)
-      query = process_query(query) unless query.is_a?(Query)
-      group = Hash.new { |h, k| h[k] = [] }
-      query.terms(searcher).each { |tvt| group[tvt.field] << tvt }
-      group
     end
 
     # iterate through all documents in the index. This method preloads the
@@ -1087,20 +965,23 @@ module Ferret::Index
 
   end
 
-  # A TVTerm that knows about its associated offset. See Index#term_vector_fields.
-  class TermVector::TVTermWithOffset < TVTerm
+  class TermVector
+    # A TVTerm that knows about its associated offset.
+    # See Ferret::Search::Searcher#term_vector_fields.
+    class TVTermWithOffset < TVTerm
 
-    attr_reader :offset, :offsets
+      attr_reader :offset, :range
 
-    def initialize(tvt, offset)
-      super(*tvt)
-      @offset, @offsets = offset, [offset.start, offset.end]
+      def initialize(tvt, offset)
+        super(*tvt)
+        @offset, @range = offset, [offset.start, offset.end]
+      end
+
+      def <=>(other)
+        range <=> other.range
+      end
+
     end
-
-    def <=>(other)
-      offsets <=> other.offsets
-    end
-
   end
 end
 

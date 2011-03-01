@@ -17,7 +17,11 @@ class FieldsPositionsTest < Test::Unit::TestCase
       { :title => 'Catwoman',              :description => '<b>Spandex</b> and <b>cats</b>', :arf => 'bar' }
     ]
 
-    @query, @query_untokenized = 'cat? OR span*', 'Catwoman'
+    @query, @query_untokenized, @options = 'cat? OR span*', 'Catwoman', { :with_fields => true }
+  end
+
+  def teardown
+    @dir.close
   end
 
   # FieldInfos:
@@ -43,14 +47,49 @@ class FieldsPositionsTest < Test::Unit::TestCase
   def setup_index(options = {})
     @index = Index.new(:dir => @dir, :field_infos => FieldInfos.new(options))
     @docs.each { |doc| @index << doc }
+
+    [options[:index].to_s =~ /\Auntokenized/,
+     options[:term_vector] != :with_positions_offsets]
   end
 
-  def teardown
-    @dir.close
+  def check(count, index_options)
+    untokenized, no_highlight = setup_index(index_options)
+
+    @hits = 0
+
+    yield [untokenized ? @query_untokenized : @query, @options],
+          [untokenized, no_highlight]
+
+    assert_equal count, @hits
   end
 
-  def check_highlight(doc_id, score, fields, untokenized = false, no_highlight = false)
-    doc, highlight, field_count, term_count = @docs[doc_id], @highlights[doc_id], 0, 0
+  def check_search(*check_args)
+    check(*check_args) { |search_args, highlight_args|
+      @index.search(*search_args).hits.each { |hit|
+        @hits += 1
+
+        if block_given?
+          yield hit
+        else
+          check_highlight(*highlight_args + [hit.doc, hit.score, hit.fields])
+        end
+      }
+    }
+  end
+
+  def check_search_each(*check_args)
+    check(*check_args) { |search_args, highlight_args|
+      @index.search_each(*search_args) { |*args|
+        @hits += 1
+        block_given? ? yield(*args) : check_highlight(*highlight_args + args)
+      }
+    }
+  end
+
+  def check_highlight(untokenized, no_highlight, doc_id, score, fields)
+    doc, highlight = @docs[doc_id], @highlights[doc_id]
+
+    field_count, term_count = 0, 0
 
     fields.each { |field, terms|
       field_count += 1
@@ -77,215 +116,135 @@ class FieldsPositionsTest < Test::Unit::TestCase
   end
 
   def test_search_with_fields_default
-    setup_index(:store => :yes, :term_vector => :with_positions_offsets, :index => :yes)
-    hits = 0
-    @index.search_with_fields(@query).hits.each { |hit|
-      hits += 1
-      check_highlight(hit.doc, hit.score, hit.fields)
-    }
-    assert_equal 2, hits
+    check_search(2,
+      :store => :yes, :term_vector => :with_positions_offsets, :index => :yes
+    )
   end
 
   def test_search_each_with_fields_default
-    setup_index(:store => :yes, :term_vector => :with_positions_offsets, :index => :yes)
-    hits = 0
-    @index.search_each_with_fields(@query) { |doc, score, fields|
-      hits += 1
-      check_highlight(doc, score, fields)
-    }
-    assert_equal 2, hits
+    check_search_each(2,
+      :store => :yes, :term_vector => :with_positions_offsets, :index => :yes
+    )
   end
 
   def test_search_with_fields_store_no
-    setup_index(:store => :no, :term_vector => :with_positions_offsets, :index => :yes)
-    hits = 0
-    @index.search_with_fields(@query).hits.each { |hit|
-      hits += 1
-      check_highlight(hit.doc, hit.score, hit.fields)
-    }
-    assert_equal 2, hits
+    check_search(2,
+      :store => :no, :term_vector => :with_positions_offsets, :index => :yes
+    )
   end
 
   def test_search_each_with_fields_store_no
-    setup_index(:store => :no, :term_vector => :with_positions_offsets, :index => :yes)
-    hits = 0
-    @index.search_each_with_fields(@query) { |doc, score, fields|
-      hits += 1
-      check_highlight(doc, score, fields)
-    }
-    assert_equal 2, hits
+    check_search_each(2,
+      :store => :no, :term_vector => :with_positions_offsets, :index => :yes
+    )
   end
 
   def test_search_with_fields_store_compressed
-    setup_index(:store => :compressed, :term_vector => :with_positions_offsets, :index => :yes)
-    hits = 0
-    @index.search_with_fields(@query).hits.each { |hit|
-      hits += 1
-      check_highlight(hit.doc, hit.score, hit.fields)
-    }
-    assert_equal 2, hits
+    check_search(2,
+      :store => :compressed, :term_vector => :with_positions_offsets, :index => :yes
+    )
   end
 
   def test_search_each_with_fields_store_compressed
-    setup_index(:store => :compressed, :term_vector => :with_positions_offsets, :index => :yes)
-    hits = 0
-    @index.search_each_with_fields(@query) { |doc, score, fields|
-      hits += 1
-      check_highlight(doc, score, fields)
-    }
-    assert_equal 2, hits
+    check_search_each(2,
+      :store => :compressed, :term_vector => :with_positions_offsets, :index => :yes
+    )
   end
 
   def test_search_with_fields_index_no
-    assert_raises(ArgumentError) {
-      setup_index(:store => :yes, :term_vector => :with_positions_offsets, :index => :no)
-    }
+    assert_raises(ArgumentError) { setup_index(
+      :store => :yes, :term_vector => :with_positions_offsets, :index => :no
+    ) }
   end
 
   def test_search_each_with_fields_index_no
-    assert_raises(ArgumentError) {
-      setup_index(:store => :yes, :term_vector => :with_positions_offsets, :index => :no)
-    }
+    assert_raises(ArgumentError) { setup_index(
+      :store => :yes, :term_vector => :with_positions_offsets, :index => :no
+    ) }
   end
 
   def test_search_with_fields_index_untokenized
-    setup_index(:store => :yes, :term_vector => :with_positions_offsets, :index => :untokenized)
-    hits = 0
-    @index.search_with_fields(@query_untokenized).hits.each { |hit|
-      hits += 1
-      check_highlight(hit.doc, hit.score, hit.fields, true)
-    }
-    assert_equal 1, hits
+    check_search(1,
+      :store => :yes, :term_vector => :with_positions_offsets, :index => :untokenized
+    )
   end
 
   def test_search_each_with_fields_index_untokenized
-    setup_index(:store => :yes, :term_vector => :with_positions_offsets, :index => :untokenized)
-    hits = 0
-    @index.search_each_with_fields(@query_untokenized) { |doc, score, fields|
-      hits += 1
-      check_highlight(doc, score, fields, true)
-    }
-    assert_equal 1, hits
+    check_search_each(1,
+      :store => :yes, :term_vector => :with_positions_offsets, :index => :untokenized
+    )
   end
 
   def test_search_with_fields_index_omit_norms
-    setup_index(:store => :yes, :term_vector => :with_positions_offsets, :index => :omit_norms)
-    hits = 0
-    @index.search_with_fields(@query).hits.each { |hit|
-      hits += 1
-      check_highlight(hit.doc, hit.score, hit.fields)
-    }
-    assert_equal 2, hits
+    check_search(2,
+      :store => :yes, :term_vector => :with_positions_offsets, :index => :omit_norms
+    )
   end
 
   def test_search_each_with_fields_index_omit_norms
-    setup_index(:store => :yes, :term_vector => :with_positions_offsets, :index => :omit_norms)
-    hits = 0
-    @index.search_each_with_fields(@query) { |doc, score, fields|
-      hits += 1
-      check_highlight(doc, score, fields)
-    }
-    assert_equal 2, hits
+    check_search_each(2,
+      :store => :yes, :term_vector => :with_positions_offsets, :index => :omit_norms
+    )
   end
 
   def test_search_with_fields_index_untokenized_omit_norms
-    setup_index(:store => :yes, :term_vector => :with_positions_offsets, :index => :untokenized_omit_norms)
-    hits = 0
-    @index.search_with_fields(@query_untokenized).hits.each { |hit|
-      hits += 1
-      check_highlight(hit.doc, hit.score, hit.fields, true)
-    }
-    assert_equal 1, hits
+    check_search(1,
+      :store => :yes, :term_vector => :with_positions_offsets, :index => :untokenized_omit_norms
+    )
   end
 
   def test_search_each_with_fields_index_untokenized_omit_norms
-    setup_index(:store => :yes, :term_vector => :with_positions_offsets, :index => :untokenized_omit_norms)
-    hits = 0
-    @index.search_each_with_fields(@query_untokenized) { |doc, score, fields|
-      hits += 1
-      check_highlight(doc, score, fields, true)
-    }
-    assert_equal 1, hits
+    check_search_each(1,
+      :store => :yes, :term_vector => :with_positions_offsets, :index => :untokenized_omit_norms
+    )
   end
 
   def test_search_with_fields_term_vector_no
-    setup_index(:store => :yes, :term_vector => :no, :index => :yes)
-    hits = 0
-    @index.search_with_fields(@query).hits.each { |hit|
-      hits += 1
-      assert_equal 0, hit.fields.size
-    }
-    assert_equal 2, hits
+    check_search(2,
+      :store => :yes, :term_vector => :no, :index => :yes
+    ) { |hit| assert_equal 0, hit.fields.size }
   end
 
   def test_search_each_with_fields_term_vector_no
-    setup_index(:store => :yes, :term_vector => :no, :index => :yes)
-    hits = 0
-    @index.search_each_with_fields(@query) { |doc, score, fields|
-      hits += 1
-      assert_equal 0, fields.size
-    }
-    assert_equal 2, hits
+    check_search_each(2,
+      :store => :yes, :term_vector => :no, :index => :yes
+    ) { |doc, score, fields| assert_equal 0, fields.size }
   end
 
   def test_search_with_fields_term_vector_yes
-    setup_index(:store => :yes, :term_vector => :yes, :index => :yes)
-    hits = 0
-    @index.search_with_fields(@query).hits.each { |hit|
-      hits += 1
-      check_highlight(hit.doc, hit.score, hit.fields, false, true)
-    }
-    assert_equal 2, hits
+    check_search(2,
+      :store => :yes, :term_vector => :yes, :index => :yes
+    )
   end
 
   def test_search_each_with_fields_term_vector_yes
-    setup_index(:store => :yes, :term_vector => :yes, :index => :yes)
-    hits = 0
-    @index.search_each_with_fields(@query) { |doc, score, fields|
-      hits += 1
-      check_highlight(doc, score, fields, false, true)
-    }
-    assert_equal 2, hits
+    check_search_each(2,
+      :store => :yes, :term_vector => :yes, :index => :yes
+    )
   end
 
   def test_search_with_fields_term_vector_with_positions
-    setup_index(:store => :yes, :term_vector => :with_positions, :index => :yes)
-    hits = 0
-    @index.search_with_fields(@query).hits.each { |hit|
-      hits += 1
-      check_highlight(hit.doc, hit.score, hit.fields, false, true)
-    }
-    assert_equal 2, hits
+    check_search(2,
+      :store => :yes, :term_vector => :with_positions, :index => :yes
+    )
   end
 
   def test_search_each_with_fields_term_vector_with_positions
-    setup_index(:store => :yes, :term_vector => :with_positions, :index => :yes)
-    hits = 0
-    @index.search_each_with_fields(@query) { |doc, score, fields|
-      hits += 1
-      check_highlight(doc, score, fields, false, true)
-    }
-    assert_equal 2, hits
+    check_search_each(2,
+      :store => :yes, :term_vector => :with_positions, :index => :yes
+    )
   end
 
   def test_search_with_fields_term_vector_with_offsets
-    setup_index(:store => :yes, :term_vector => :with_offsets, :index => :yes)
-    hits = 0
-    @index.search_with_fields(@query).hits.each { |hit|
-      hits += 1
-      check_highlight(hit.doc, hit.score, hit.fields, false, true)
-    }
-    assert_equal 2, hits
+    check_search(2,
+      :store => :yes, :term_vector => :with_offsets, :index => :yes
+    )
   end
 
   def test_search_each_with_fields_term_vector_with_offsets
-    setup_index(:store => :yes, :term_vector => :with_offsets, :index => :yes)
-    hits = 0
-    @index.search_each_with_fields(@query) { |doc, score, fields|
-      hits += 1
-      check_highlight(doc, score, fields, false, true)
-    }
-    assert_equal 2, hits
+    check_search_each(2,
+      :store => :yes, :term_vector => :with_offsets, :index => :yes
+    )
   end
 
 end
