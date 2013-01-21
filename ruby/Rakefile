@@ -1,7 +1,7 @@
 require 'rake'
 require 'rake/clean'
-require 'rake/gempackagetask'
-require 'rake/rdoctask'
+require 'rubygems/package_task'
+require 'rdoc/task'
 require 'rake/testtask'
 
 $:. << 'lib'
@@ -220,10 +220,10 @@ end
 PKG_FILES = FileList[
   'setup.rb',
   '[-A-Z]*',
-  'lib/**/*.rb', 
-  'lib/**/*.rhtml', 
-  'lib/**/*.css', 
-  'lib/**/*.js', 
+  'lib/**/*.rb',
+  'lib/**/*.rhtml',
+  'lib/**/*.css',
+  'lib/**/*.js',
   'test/**/*.rb',
   'test/**/wordfile',
   'rake_utils/**/*.rb',
@@ -232,7 +232,7 @@ PKG_FILES = FileList[
 ]
 
 spec = Gem::Specification.new do |s|
-  
+
   #### Basic information.
   s.name = 'ferret'
   s.version = Ferret::VERSION
@@ -240,7 +240,7 @@ spec = Gem::Specification.new do |s|
   s.description = "Ferret is a super fast, highly configurable search library."
 
   #### Dependencies and requirements.
-  s.add_dependency('rake')
+  s.add_development_dependency('rake')
   s.files = PKG_FILES.to_a
   s.extensions << "ext/extconf.rb"
   s.require_path = 'lib'
@@ -251,7 +251,8 @@ spec = Gem::Specification.new do |s|
   #### Author and project details.
   s.author = "David Balmain"
   s.email = "dbalmain@gmail.com"
-  s.homepage = "http://ferret.davebalmain.com/trac"
+  #s.homepage = "http://ferret.davebalmain.com/trac"
+  s.homepage = "http://github.com/jkraemer/ferret"
   s.rubyforge_project = "ferret"
 
   s.has_rdoc = true
@@ -279,7 +280,7 @@ spec = Gem::Specification.new do |s|
   end
 end
 
-package_task = Rake::GemPackageTask.new(spec) do |pkg|
+package_task = Gem::PackageTask.new(spec) do |pkg|
   unless windows
     pkg.need_zip = true
     pkg.need_tar = true
@@ -329,12 +330,12 @@ if ENV['FERRET_DEV']
   task :release => 'release:release'
   namespace :release do
     task :release => [:status_check, 'test:all', :package, :tag] do
-      say 
+      say
       say "**************************************************************"
       say "* Release #{Ferret::VERSION} Complete."
       say "* Packages ready to upload."
       say "**************************************************************"
-      say 
+      say
       reversion("lib/ferret/version.rb")
     end
 
@@ -344,7 +345,7 @@ if ENV['FERRET_DEV']
       unless `svn -q --ignore-externals status` =~ /^$/
         fail "'svn -q status' is not clean ... do you have unchecked-in files?"
       end
-      
+
       say "No outstanding checkins found ... OK"
     end
 
@@ -354,7 +355,7 @@ if ENV['FERRET_DEV']
         print "Ferret is currently at #{Ferret::VERSION}. What version now? "
         new_version = STDIN.gets.chomp!
       end until prompt("Change to version #{new_version}?")
-      
+
       if ENV['RELTEST']
         say "Would change the version in lib/ferret/version.rb from"
         say "    #{Ferret::VERSION} => #{new_version}"
@@ -425,7 +426,7 @@ if ENV['FERRET_DEV']
     task :all => [:doc, :release]
   end
 end
-   
+
 
 
 
@@ -433,10 +434,10 @@ end
 # In case I ever need to add another racc parser, here's how
 #
 # # Make Parsers ---------------------------------------------------------------
-# 
+#
 # RACC_SRC = FileList["lib/**/*.y"]
-# 
+#
 # task :parsers => RACC_OUT
 # rule(/\.tab\.rb$/ => [proc {|tn| tn.sub(/\.tab\.rb$/, '.y')}]) do |t|
-#   sh "racc #{t.source}" 
+#   sh "racc #{t.source}"
 # end
